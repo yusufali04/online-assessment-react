@@ -6,13 +6,14 @@ const bcrypt = require('bcrypt')
 const passport = require('passport');
 const LocalStrategy = require('passport-local').Strategy;
 const session = require("express-session");
-const flash = require('express-flash');
 const MongoStore = require('connect-mongo');
+const cookieParser = require('cookie-parser')
 
 
 app.use(express.urlencoded({extended: false}))
 app.use(express.json())
 app.use(express.static('public'))
+app.use(cookieParser('thisIsSecret'))
 
 app.use(cors({
     origin: 'http://localhost:3000', // Replace with your React app's URL
@@ -33,13 +34,10 @@ app.use(session({
     resave: false,
     store: sessionStore,
     saveUninitialized: false,
-    // cookie: {expires: 30000}
+    cookie: {
+        expires: 1000*60*60*24
+    }
 }));
-
-app.use(flash());
-
-/************** passport config ******************/
-
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -54,8 +52,7 @@ app.use((req,res,next)=>{
 
 })
 
-
-
+/************** passport config ******************/
 
 
 
@@ -97,12 +94,15 @@ const Quiz = mongoose.model('Quiz', quizSchema);
 
 const resultsSchema = new Schema({
     quizId: String,
+    quizTitle: String,
     userId: String,
-    studentName: String,
+    username: String,
+    email: String,
     correct: Number,
-    incorrect: Number,
+    inCorrect: Number,
     unAttempted: Number,
     totalMarks: Number,
+    shortlisted: Boolean,
     date: String
 })
 
@@ -120,7 +120,35 @@ const usersSchema = new Schema({
 
 const User = mongoose.model('user', usersSchema);
 
+// Passport configuration
 
+
+passport.use(new LocalStrategy({usernameField: 'email'}, async (email, password, done) => {
+    const user = await User.findOne({email:email});
+    if(!user){
+        return done(null, false, {message: 'No user found with this email'});
+    } else {
+        bcrypt.compare(password, user.password).then(match => {
+            if(match){
+                return done(null, user, {message: 'logged in successfully'});
+            } else {
+                return done(null, false, {message: 'Invalid username or password'});
+            }
+        }).catch(err => {
+            return done(null, false, {message: 'Something went wrong'});
+        })
+    }
+}));
+
+passport.serializeUser((user, done) => {
+    done(null, user._id);
+});
+
+passport.deserializeUser((id, done) => {
+    User.findById(id, (err, user) => {
+        done(err, user);
+    })
+})
 
 
 
@@ -130,27 +158,37 @@ const User = mongoose.model('user', usersSchema);
 
 app.get("/quizzes", (req, res)=>{
 
-    Quiz.find({}, (err, result)=>{
-        if(err){
-            res.status(500).json({err: err})
-        }
-        res.json(result)
-    })
+    try{
+        Quiz.find({}, (err, result)=>{
+            if(err){
+                throw err
+            }
+            res.json(result)
+        })
+    } catch (err){
+        res.status(500).json({err: err.message})
+    }
+    
     
 })
 
 app.get("/quizzes/:quizId", (req, res)=>{
 
-    // if(!req.isAuthenticated()){
-    //     return res.redirect("/login")
-    // }
+    if(!req.isAuthenticated()){
+        return res.status(401).json({auth: false})
+    }
 
-    Quiz.findById(req.params.quizId, (err, result)=>{
-        if(err){
-            res.status(500).json({err: err})
-        }
-        res.json(result)
-    })
+    try{
+        Quiz.findById(req.params.quizId, (err, result)=>{
+            if(err){
+                res.status(500).json({message: err})
+            }
+            res.json(result)
+        })
+    } catch (err){
+        res.status(500).json({message: err.message})
+    }
+    
 
 })
 
@@ -221,7 +259,7 @@ app.post('/api/user', async (req, res)=>{
         const result = await User.findOne({ email: body.email }).exec();
       
         if (result) {
-          throw new Error("User already exists");
+          throw new Error("User already exists, Please login");
         } else {
           const user = new User({
             username: body.username,
@@ -256,47 +294,63 @@ app.post('/api/user', async (req, res)=>{
 
 // receiving and storing student results in database in results collection
 
-app.post("/api/result", (req, res)=>{
+app.post("/submit/result", (req, res)=>{
 
     const body = req.body
     
     const result = new Result({
         quizId: body.quizId,
+        quizTitle: body.quizTitle,
         userId: body.userId,
-        studentName: body.studentName,
+        username: body.username,
+        email: body.email,
         correct: body.correct,
-        incorrect: body.incorrect,
+        inCorrect: body.inCorrect,
         unAttempted: body.unAttempted,
         totalMarks: body.totalMarks,
+        shortlisted: body.shortlisted,
         date: body.date
     })
 
     result.save().then((savedResult)=>{
 
         if(!savedResult){
-            res.send("Something went wrong")
+            res.status(500).json({message: 'Something went wrong'})
         }
         else{
-            res.send("Stored successfully")
+            res.status(200).json({message: 'Results submitted successfully'})
         }
     })
 
 })
-
-
-
 
 
 // sending result of a specific quiz by using quiz id
 
-app.get("/api/results/:quizId", (req, res)=>{
+app.get("/api/results/:quizId", async (req, res) => {
 
-    Result.find({quizId: req.params.quizId}, (err, result)=>{
-        res.json(result);
-    })
+    if(!req.isAuthenticated()){
+        return res.status(401).json({auth: false})
+    }
+    try {
+      const resultPromise = Result.find({ quizId: req.params.quizId }).exec();
+      const quizPromise = Quiz.find({ _id: req.params.quizId }).exec();
+  
+      const [result, quiz] = await Promise.all([resultPromise, quizPromise]);
+  
+      console.log(quiz[0]);
 
-})
-
+      const data = {
+        results: result,
+        quiz: quiz[0]
+      };
+  
+      res.status(200).json(data);
+    } catch (err) {
+      res.status(500).json({ message: "Something went wrong" });
+    }
+  });
+  
 
                                             /*************** API's For Admin ************/
 
@@ -320,9 +374,6 @@ app.post("/api/admin/quiz", (req, res)=>{
 
 })
 
-
-
-
 // update an entire quiz by using the quiz id
 
 app.put("/api/admin/quizzes/:id", (req, res)=>{
@@ -339,10 +390,6 @@ app.put("/api/admin/quizzes/:id", (req, res)=>{
     })
 
 })
-
-
-
-
 
 // deleting a specific quiz by using its id
 
@@ -361,8 +408,6 @@ app.delete("/api/admin/quizzes/:id", (req, res)=>{
 
 })
 
-
-
 // Adding new question to the questions array in the database
 
 app.post("/api/admin/questions/:quizId", (req, res)=>{
@@ -378,9 +423,6 @@ app.post("/api/admin/questions/:quizId", (req, res)=>{
     })
 
 })
-
-
-
 
 // Updating a specific question by using quizId and question id 
 
@@ -404,9 +446,6 @@ app.put("/api/admin/questions/:quizId/:qid", (req, res)=>{
 
 })
 
-
-
-
 // deleting a specific question
 
 app.delete("/api/admin/questions/:quizId/:qid", (req, res)=>{
@@ -423,7 +462,6 @@ app.delete("/api/admin/questions/:quizId/:qid", (req, res)=>{
 
 })
 
-
                                         /*************** API's For Instructor ************/
 
 
@@ -437,55 +475,24 @@ app.get("/api/instructor/results", (req, res)=>{
 
 })
 
-
-
-
-
-
 // sending results of specific quiz
 
-app.get("/api/instructor/results/:quizId", (req, res)=>{
+app.get("/results/:userId", (req, res)=>{
 
-    Result.find({ quizId: req.params.quizId }, (err, result)=>{
+    Result.find({ userId: req.params.userId }, (err, result)=>{
         if(err){
-            res.send({err: err})
+            res.status(500).json({message: err})
         } else {
             res.json(result)
         }
     })
+    
 
 })
 
 
 
-
                                         /*************** API's For Login And Registration ************/
-
-
-
-
-// logging in existing user
-
-app.post("/login", (req, res, next) => {
-    passport.authenticate("local", (err, user, info) => {
-      if (err) {
-        return res.status(500).json({ message: err.message });
-      }
-      if (!user) {
-        return res.status(401).json({ message: info.message });
-      }
-  
-      req.logIn(user, (err) => {
-        if (err) {
-          return res.status(500).json({ message: err.message });
-        } else {
-          res.cookie("user", user, { httpOnly: true });
-          return res.json({ message: "Login Successful", user: user });
-        }
-      });
-    })(req, res, next);
-  });
-  
 
 
 
@@ -513,94 +520,45 @@ app.delete('/api/users/:userId', (req, res)=>{
 
 
 
-// Passport configuration
 
+app.post("/login", (req, res, next)=>{
 
-passport.use(new LocalStrategy({usernameField: 'email'}, async (email, password, done) => {
-
-    const user = await User.findOne({email:email});
-
-    if(!user){
-
-        return done(null, false, {message: 'No user found with this email'});
-
-    } else {
-        bcrypt.compare(password, user.password).then(match => {
-
-            if(match){
-
-                done(null, user, {message: 'logged in successfully'});
-
-            } else {
-
-                done(null, false, {message: 'Invalid username or password'});
-
+        passport.authenticate('local', (err, user, info) => {
+            if(err){
+                console.log(err);
+                return res.status(500).json({message: info.message})
             }
-        }).catch(err => {
-
-            return done(null, false, {message: 'Something went wrong'});
-
-        })
-    }
-
-}));
-
-passport.serializeUser((user, done) => {
-    done(null, user._id);
-});
-
-passport.deserializeUser((id, done) => {
-    User.findById(id, (err, user) => {
-        done(err, user);
-    })
+            if(!user){
+                console.log(info.message);
+                return res.status(500).json({message: info.message})
+            } else {
+                req.logIn(user, (err) => {
+                    if(err){
+                        console.log(err);
+                        return res.status(500).json({message: info.message})
+                    } else {
+                        res.cookie('user', {_id: user._id, username: user.username, email: user.email, role: user.role})
+                        res.json({message : "success", user: {_id: user._id, username: user.username, email: user.email, role: user.role}})
+                    }
+                })
+            }
+        })(req, res, next)
 })
 
 
 
 
-app.post("/api/users/login", (req, res, next)=>{
-
-    passport.authenticate('local', (err, user, info) => {
-        if(err){
-
-            res.flash('error', info.message);
-            res.redirect('/login')
-            
-        }
-        if(!user){
-
-            req.flash('error', info.message);
-            res.redirect('/login')
-
-        } else {
-
-            req.logIn(user, (err) => {
-
-                if(err){
-                    req.flash('error', info.message);
-                    return next(err);
-                } else if(user.role === 'admin') {
-                    return res.redirect('/admin')
-                } else {
-                    return res.redirect('/')
-                }
-                
-            })
-        }
 
 
-})(req, res, next)
-
-})
-
-
-app.get("/logout", (req, res)=>{
+app.post("/logout", (req, res)=>{
 
     req.logout((err)=>{
 
-        if(!err){
-            res.redirect("/login")
+        if(err){
+            res.status(500).json({message: err})
         }
+        res.send('Successfully logged out')
+        
 
     })
 

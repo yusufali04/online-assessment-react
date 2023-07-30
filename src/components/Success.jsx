@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-
+import { Link } from "react-router-dom";
 const Success = ({results}) => {
   const [counter, setCounter] = useState(10);
   const [complete, setComplete] = useState(false)
@@ -22,6 +22,11 @@ const Success = ({results}) => {
     };
   }, []);
 
+  if(complete){
+    setTimeout(()=>{
+      document.exitFullscreen()
+    }, 1000)
+  }
 
   return (
     <div className="submit-wrapper">
@@ -34,13 +39,25 @@ const Success = ({results}) => {
                 {
                     results.shortlisted? <h1>Congratulations! You have been shortlisted</h1> : <h1>Sorry! You are not shortlisted</h1>
                 }
-                
-                <h4 style={{textAlign: "center", margin: "1rem 0"}}>Correct: {results.correct}</h4>
-                <div style={{width: "50%", display: "flex", justifyContent: "space-between", margin: "auto"}}>
-                    <h4>Incorrect: {results.incorrect}</h4>
-                    <h4>Unattempted: {results.unAttempted}</h4>
+                <div style={{width: "60%", display: "flex", justifyContent: "space-between", margin: "2rem auto"}}>
+                    <div className="show-result" style={{textAlign: 'center'}}>
+                      <h2>{results.correct}</h2>
+                      <h4 style={{}}>Correct</h4>
+                    </div>
+                    <div className="show-result" style={{textAlign: 'center'}}>
+                      <h2>{results.incorrect}</h2>
+                      <h4 style={{}}>Incorrect</h4>
+                    </div>
+                    <div className="show-result" style={{textAlign: 'center'}}>
+                      <h2>{results.unAttempted}</h2>
+                      <h4 style={{}}>Unattempted</h4>
+                    </div>
+                    
                 </div>
-                
+                <div className="submit-btns">
+                  <button onClick={()=>window.location.reload()}>Restart</button>
+                  <Link to='/'><button>Home</button></Link>
+                </div>
             </div>
             
         ) : (
